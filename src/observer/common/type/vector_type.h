@@ -22,7 +22,9 @@ public:
   VectorType() : DataType(AttrType::VECTORS) {}
   virtual ~VectorType() {}
 
-  int compare(const Value &left, const Value &right) const override { return INT32_MAX; }
+  static RC parse_vector(const char *text, Value &value);
+
+  int compare(const Value &left, const Value &right) const override;
 
   RC add(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
   RC subtract(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }

@@ -41,6 +41,14 @@ Value::Value(const Value &other)
       set_string_from_other(other);
     } break;
 
+    case AttrType::VECTORS: {
+  if (other.value_.pointer_value_ != nullptr && this->length_ > 0) {
+    this->value_.pointer_value_ = new char[this->length_];
+    memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+  } else {
+    this->value_.pointer_value_ = nullptr;
+  }
+} break;
     default: {
       this->value_ = other.value_;
     } break;
@@ -71,6 +79,15 @@ Value &Value::operator=(const Value &other)
       set_string_from_other(other);
     } break;
 
+    case AttrType::VECTORS: {
+  if (other.value_.pointer_value_ != nullptr && this->length_ > 0) {
+    this->value_.pointer_value_ = new char[this->length_];
+    memcpy(this->value_.pointer_value_, other.value_.pointer_value_, this->length_);
+  } else {
+    this->value_.pointer_value_ = nullptr;
+  }
+} break;
+
     default: {
       this->value_ = other.value_;
     } break;
@@ -97,6 +114,7 @@ void Value::reset()
 {
   switch (attr_type_) {
     case AttrType::CHARS:
+    case AttrType::VECTORS:
       if (own_data_ && value_.pointer_value_ != nullptr) {
         delete[] value_.pointer_value_;
         value_.pointer_value_ = nullptr;
@@ -127,6 +145,9 @@ void Value::set_data(char *data, int length)
     case AttrType::BOOLEANS: {
       value_.bool_value_ = *(int *)data != 0;
       length_            = length;
+    } break;
+    case AttrType::VECTORS: {
+      set_vector(data, length);
     } break;
     default: {
       LOG_WARN("unknown data type: %d", attr_type_);
@@ -191,6 +212,24 @@ void Value::set_empty_string(int len)
   
 }
 
+void Value::set_vector(const char *data, int length)
+{
+  reset();
+  attr_type_ = AttrType::VECTORS;
+
+  if (data == nullptr || length <= 0) {
+    value_.pointer_value_ = nullptr;
+    length_               = 0;
+    own_data_             = false;
+    return;
+  }
+
+  own_data_             = true;
+  length_               = length;
+  value_.pointer_value_ = new char[length];
+  memcpy(value_.pointer_value_, data, length);
+}
+
 void Value::set_value(const Value &value)
 {
   switch (value.attr_type_) {
@@ -205,6 +244,9 @@ void Value::set_value(const Value &value)
     } break;
     case AttrType::BOOLEANS: {
       set_boolean(value.get_boolean());
+    } break;
+    case AttrType::VECTORS: {
+      set_vector(value.data(), value.length());
     } break;
     default: {
       ASSERT(false, "got an invalid value type");
@@ -225,7 +267,8 @@ void Value::set_string_from_other(const Value &other)
 char *Value::data() const
 {
   switch (attr_type_) {
-    case AttrType::CHARS: {
+    case AttrType::CHARS:
+    case AttrType::VECTORS: {
       return value_.pointer_value_;
     } break;
     default: {

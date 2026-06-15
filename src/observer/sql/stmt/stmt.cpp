@@ -19,6 +19,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/stmt/create_index_stmt.h"
 #include "sql/stmt/create_table_stmt.h"
 #include "sql/stmt/delete_stmt.h"
+#include "sql/stmt/drop_table_stmt.h"
 #include "sql/stmt/desc_table_stmt.h"
 #include "sql/stmt/exit_stmt.h"
 #include "sql/stmt/explain_stmt.h"
@@ -45,6 +46,7 @@ bool stmt_type_ddl(StmtType type)
     }
   }
 }
+
 RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
 {
   stmt = nullptr;
@@ -53,9 +55,11 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
     case SCF_INSERT: {
       return InsertStmt::create(db, sql_node.insertion, stmt);
     }
+
     case SCF_DELETE: {
       return DeleteStmt::create(db, sql_node.deletion, stmt);
     }
+
     case SCF_SELECT: {
       return SelectStmt::create(db, sql_node.selection, stmt);
     }
@@ -72,11 +76,15 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
       return CreateTableStmt::create(db, sql_node.create_table, stmt);
     }
 
+    case SCF_DROP_TABLE: {
+      return DropTableStmt::create(db, sql_node.drop_table.relation_name, stmt);
+    }
+
     case SCF_DESC_TABLE: {
       return DescTableStmt::create(db, sql_node.desc_table, stmt);
     }
 
-    case SCF_ANALYZE_TABLE: { 
+    case SCF_ANALYZE_TABLE: {
       return AnalyzeTableStmt::create(db, sql_node.analyze_table, stmt);
     }
 
@@ -117,5 +125,6 @@ RC Stmt::create_stmt(Db *db, ParsedSqlNode &sql_node, Stmt *&stmt)
       LOG_INFO("Command::type %d doesn't need to create statement.", sql_node.flag);
     } break;
   }
+
   return RC::UNIMPLEMENTED;
 }

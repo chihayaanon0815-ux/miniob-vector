@@ -23,6 +23,22 @@ RC CreateTableStmt::create(Db *db, const CreateTableSqlNode &create_table, Stmt 
   if (storage_format == StorageFormat::UNKNOWN_FORMAT) {
     return RC::INVALID_ARGUMENT;
   }
+  for (const AttrInfoSqlNode &attr_info : create_table.attr_infos) {
+    if (attr_info.type == AttrType::VECTORS) {
+      if (attr_info.length <= 0 || attr_info.length % sizeof(float) != 0) {
+        LOG_WARN("invalid vector field length. field=%s, length=%d",
+            attr_info.name.c_str(), attr_info.length);
+        return RC::INVALID_ARGUMENT;
+      }
+
+      const int vector_dim = attr_info.length / sizeof(float);
+      if (vector_dim <= 0 || vector_dim > 16383) {
+        LOG_WARN("invalid vector dimension. field=%s, dimension=%d",
+            attr_info.name.c_str(), vector_dim);
+        return RC::INVALID_ARGUMENT;
+      }
+    }
+  }
   stmt = new CreateTableStmt(create_table.relation_name, create_table.attr_infos, create_table.primary_keys, storage_format);
   sql_debug("create table statement: table name %s", create_table.relation_name.c_str());
   return RC::SUCCESS;

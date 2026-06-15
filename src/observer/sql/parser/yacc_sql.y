@@ -11,6 +11,7 @@
 #include "sql/parser/yacc_sql.hpp"
 #include "sql/parser/lex_sql.h"
 #include "sql/expr/expression.h"
+#include "common/type/vector_type.h"
 
 using namespace std;
 
@@ -89,6 +90,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         STRING_T
         FLOAT_T
         VECTOR_T
+        STRING_TO_VECTOR
         HELP
         EXIT
         DOT //QUOTE
@@ -363,14 +365,24 @@ attr_def:
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = $4;
+
+      if ($$->type == AttrType::VECTORS) {
+        $$->length = $4 * sizeof(float);
+      } else {
+        $$->length = $4;
+      }
     }
     | ID type
     {
       $$ = new AttrInfoSqlNode;
       $$->type = (AttrType)$2;
       $$->name = $1;
-      $$->length = 4;
+
+      if ($$->type == AttrType::VECTORS) {
+        $$->length = 2048 * sizeof(float);
+      } else {
+        $$->length = 4;
+      }
     }
     ;
 number:
@@ -445,6 +457,18 @@ value:
       char *tmp = common::substr($1,1,strlen($1)-2);
       $$ = new Value(tmp);
       free(tmp);
+    }
+    | STRING_TO_VECTOR LBRACE SSS RBRACE {
+      char *tmp = common::substr($3, 1, strlen($3) - 2);
+      $$ = new Value;
+      RC rc = VectorType::parse_vector(tmp, *$$);
+      free(tmp);
+      if (rc != RC::SUCCESS) {
+        delete $$;
+        $$ = nullptr;
+        YYERROR;
+      }
+      @$ = @1;
     }
     ;
 storage_format:

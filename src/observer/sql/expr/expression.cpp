@@ -141,9 +141,28 @@ ComparisonExpr::~ComparisonExpr() {}
 
 RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &result) const
 {
-  RC  rc         = RC::SUCCESS;
+  RC rc = RC::SUCCESS;
+  result = false;
+
+  if (left.attr_type() == AttrType::VECTORS || right.attr_type() == AttrType::VECTORS) {
+    if (left.attr_type() != AttrType::VECTORS || right.attr_type() != AttrType::VECTORS) {
+      LOG_WARN("cannot compare vector with non-vector. left=%s, right=%s",
+          attr_type_to_string(left.attr_type()), attr_type_to_string(right.attr_type()));
+      return RC::INTERNAL;
+    }
+
+    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
+      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_);
+      return RC::INTERNAL;
+    }
+
+    if (left.length() != right.length()) {
+      LOG_WARN("cannot compare vectors with different lengths. left=%d, right=%d", left.length(), right.length());
+      return RC::INTERNAL;
+    }
+  }
+
   int cmp_result = left.compare(right);
-  result         = false;
   switch (comp_) {
     case EQUAL_TO: {
       result = (0 == cmp_result);
@@ -229,15 +248,48 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     LOG_WARN("failed to get value of left expression. rc=%s", strrc(rc));
     return rc;
   }
+
   rc = right_->get_column(chunk, right_column);
   if (rc != RC::SUCCESS) {
     LOG_WARN("failed to get value of right expression. rc=%s", strrc(rc));
     return rc;
   }
+
   if (left_column.attr_type() != right_column.attr_type()) {
     LOG_WARN("cannot compare columns with different types");
     return RC::INTERNAL;
   }
+
+  if (left_column.attr_type() == AttrType::VECTORS) {
+    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
+      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_);
+      return RC::INTERNAL;
+    }
+
+    int rows = 0;
+    if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
+      rows = right_column.count();
+    } else {
+      rows = left_column.count();
+    }
+
+    for (int i = 0; i < rows; ++i) {
+      Value left_val  = left_column.get_value(i);
+      Value right_val = right_column.get_value(i);
+
+      bool result = false;
+      rc = compare_value(left_val, right_val, result);
+      if (rc != RC::SUCCESS) {
+        LOG_WARN("failed to compare vector values. rc=%s", strrc(rc));
+        return rc;
+      }
+
+      select[i] &= result ? 1 : 0;
+    }
+
+    return rc;
+  }
+
   if (left_column.attr_type() == AttrType::INTS) {
     rc = compare_column<int>(left_column, right_column, select);
   } else if (left_column.attr_type() == AttrType::FLOATS) {
@@ -249,25 +301,27 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
     } else {
       rows = left_column.count();
     }
+
     for (int i = 0; i < rows; ++i) {
-      Value left_val = left_column.get_value(i);
+      Value left_val  = left_column.get_value(i);
       Value right_val = right_column.get_value(i);
-      bool        result   = false;
-      rc                   = compare_value(left_val, right_val, result);
+
+      bool result = false;
+      rc = compare_value(left_val, right_val, result);
       if (rc != RC::SUCCESS) {
         LOG_WARN("failed to compare tuple cells. rc=%s", strrc(rc));
         return rc;
       }
+
       select[i] &= result ? 1 : 0;
     }
-
   } else {
     LOG_WARN("unsupported data type %d", left_column.attr_type());
     return RC::INTERNAL;
   }
+
   return rc;
 }
-
 template <typename T>
 RC ComparisonExpr::compare_column(const Column &left, const Column &right, vector<uint8_t> &result) const
 {

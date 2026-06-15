@@ -27,6 +27,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/trx/trx.h"
 #include "storage/clog/disk_log_handler.h"
 #include "storage/clog/integrated_log_replayer.h"
+#include <unistd.h>
 
 using namespace common;
 
@@ -173,6 +174,35 @@ RC Db::create_table(const char *table_name, span<const AttrInfoSqlNode> attribut
 
   opened_tables_[table_name] = table;
   LOG_INFO("Create table success. table name=%s, table_id:%d", table_name, table_id);
+  return RC::SUCCESS;
+}
+
+RC Db::drop_table(const char *table_name)
+{
+  auto iter = opened_tables_.find(table_name);
+
+  if (iter == opened_tables_.end()) {
+    LOG_WARN("table does not exist. table=%s", table_name);
+    return RC::SCHEMA_TABLE_NOT_EXIST;
+  }
+
+  Table *table = iter->second;
+
+  string meta_file = table_meta_file(path_.c_str(), table_name);
+  string data_file = table_data_file(path_.c_str(), table_name);
+
+  cout << meta_file << endl;
+  cout << data_file << endl;
+
+  delete table;
+
+  opened_tables_.erase(iter);
+
+  unlink(meta_file.c_str());
+  unlink(data_file.c_str());
+
+  LOG_INFO("drop table success. table=%s", table_name);
+
   return RC::SUCCESS;
 }
 

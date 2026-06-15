@@ -91,18 +91,28 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
 
   filter_unit = new FilterUnit;
 
+  AttrType left_type  = AttrType::UNDEFINED;
+  AttrType right_type = AttrType::UNDEFINED;
+
   if (condition.left_is_attr) {
     Table           *table = nullptr;
     const FieldMeta *field = nullptr;
     rc                     = get_table_and_field(db, default_table, tables, condition.left_attr, table, field);
     if (rc != RC::SUCCESS) {
       LOG_WARN("cannot find attr");
+      delete filter_unit;
+      filter_unit = nullptr;
       return rc;
     }
+
+    left_type = field->type();
+
     FilterObj filter_obj;
     filter_obj.init_attr(Field(table, field));
     filter_unit->set_left(filter_obj);
   } else {
+    left_type = condition.left_value.attr_type();
+
     FilterObj filter_obj;
     filter_obj.init_value(condition.left_value);
     filter_unit->set_left(filter_obj);
@@ -114,19 +124,42 @@ RC FilterStmt::create_filter_unit(Db *db, Table *default_table, unordered_map<st
     rc                     = get_table_and_field(db, default_table, tables, condition.right_attr, table, field);
     if (rc != RC::SUCCESS) {
       LOG_WARN("cannot find attr");
+      delete filter_unit;
+      filter_unit = nullptr;
       return rc;
     }
+
+    right_type = field->type();
+
     FilterObj filter_obj;
     filter_obj.init_attr(Field(table, field));
     filter_unit->set_right(filter_obj);
   } else {
+    right_type = condition.right_value.attr_type();
+
     FilterObj filter_obj;
     filter_obj.init_value(condition.right_value);
     filter_unit->set_right(filter_obj);
   }
 
+  if (left_type == AttrType::VECTORS || right_type == AttrType::VECTORS) {
+    if (left_type != AttrType::VECTORS || right_type != AttrType::VECTORS) {
+      LOG_WARN("cannot compare vector with non-vector. left=%s, right=%s",
+          attr_type_to_string(left_type), attr_type_to_string(right_type));
+      delete filter_unit;
+      filter_unit = nullptr;
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+
+    if (comp != EQUAL_TO && comp != NOT_EQUAL) {
+      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp);
+      delete filter_unit;
+      filter_unit = nullptr;
+      return RC::INVALID_ARGUMENT;
+    }
+  }
+
   filter_unit->set_comp(comp);
 
-  // 检查两个类型是否能够比较
   return rc;
 }

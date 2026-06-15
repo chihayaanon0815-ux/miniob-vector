@@ -48,6 +48,11 @@ RC DefaultConditionFilter::init(const ConDesc &left, const ConDesc &right, AttrT
     return RC::INVALID_ARGUMENT;
   }
 
+  if (attr_type == AttrType::VECTORS && comp_op != EQUAL_TO && comp_op != NOT_EQUAL) {
+    LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_op);
+    return RC::INVALID_ARGUMENT;
+  }
+
   left_      = left;
   right_     = right;
   attr_type_ = attr_type;
@@ -136,6 +141,25 @@ bool DefaultConditionFilter::filter(const Record &rec) const
     right_value.set_value(right_.value);
   }
 
+  if (left_value.attr_type() == AttrType::VECTORS || right_value.attr_type() == AttrType::VECTORS) {
+    if (left_value.attr_type() != AttrType::VECTORS || right_value.attr_type() != AttrType::VECTORS) {
+      LOG_WARN("cannot compare vector with non-vector. left=%s, right=%s",
+          attr_type_to_string(left_value.attr_type()), attr_type_to_string(right_value.attr_type()));
+      return false;
+    }
+
+    if (comp_op_ != EQUAL_TO && comp_op_ != NOT_EQUAL) {
+      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_op_);
+      return false;
+    }
+
+    if (left_value.length() != right_value.length()) {
+      LOG_WARN("cannot compare vectors with different lengths. left=%d, right=%d",
+          left_value.length(), right_value.length());
+      return false;
+    }
+  }
+
   int cmp_result = left_value.compare(right_value);
 
   switch (comp_op_) {
@@ -150,9 +174,8 @@ bool DefaultConditionFilter::filter(const Record &rec) const
   }
 
   LOG_PANIC("Never should print this.");
-  return cmp_result;  // should not go here
+  return cmp_result;
 }
-
 CompositeConditionFilter::~CompositeConditionFilter()
 {
   if (memory_owner_) {
