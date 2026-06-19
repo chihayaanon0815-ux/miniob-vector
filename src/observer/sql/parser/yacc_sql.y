@@ -51,6 +51,17 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
   return expr;
 }
 
+FunctionExpr *create_function_expression(const char *function_name,
+                                         vector<unique_ptr<Expression>> *arguments,
+                                         const char *sql_string,
+                                         YYLTYPE *llocp)
+{
+  FunctionExpr *expr = new FunctionExpr(function_name, *arguments);
+  expr->set_name(token_name(sql_string, llocp));
+  delete arguments;
+  return expr;
+}
+
 %}
 
 %define api.pure full
@@ -91,6 +102,8 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
         FLOAT_T
         VECTOR_T
         STRING_TO_VECTOR
+        VECTOR_TO_STRING
+        DISTANCE
         HELP
         EXIT
         DOT //QUOTE
@@ -178,6 +191,7 @@ UnboundAggregateExpr *create_aggregate_expression(const char *aggregate_name,
 %type <relation_list>       rel_list
 %type <expression>          expression
 %type <expression>          aggregate_expression
+%type <expression>          function_expression
 %type <expression_list>     expression_list
 %type <expression_list>     group_by
 %type <cstring>             fields_terminated_by
@@ -593,11 +607,23 @@ expression:
     | aggregate_expression {
       $$ = $1;
     }
+    | function_expression {
+      $$ = $1;
+    }
     ;
 
 aggregate_expression:
     ID LBRACE expression RBRACE {
       $$ = create_aggregate_expression($1, $3, sql_string, &@$);
+    }
+    ;
+
+function_expression:
+    VECTOR_TO_STRING LBRACE expression_list RBRACE {
+      $$ = create_function_expression("VECTOR_TO_STRING", $3, sql_string, &@$);
+    }
+    | DISTANCE LBRACE expression_list RBRACE {
+      $$ = create_function_expression("DISTANCE", $3, sql_string, &@$);
     }
     ;
 

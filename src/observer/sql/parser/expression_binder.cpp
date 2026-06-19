@@ -86,6 +86,10 @@ RC ExpressionBinder::bind_expression(unique_ptr<Expression> &expr, vector<unique
       return bind_arithmetic_expression(expr, bound_expressions);
     } break;
 
+    case ExprType::FUNCTION: {
+      return bind_function_expression(expr, bound_expressions);
+    } break;
+
     case ExprType::AGGREGATION: {
       ASSERT(false, "shouldn't be here");
     } break;
@@ -348,6 +352,77 @@ RC ExpressionBinder::bind_arithmetic_expression(
   unique_ptr<Expression> &right = child_bound_expressions[0];
   if (right.get() != right_expr.get()) {
     right_expr.reset(right.release());
+  }
+
+  bound_expressions.emplace_back(std::move(expr));
+  return RC::SUCCESS;
+}
+
+RC ExpressionBinder::bind_function_expression(
+    unique_ptr<Expression> &expr, vector<unique_ptr<Expression>> &bound_expressions)
+{
+  if (nullptr == expr) {
+    return RC::SUCCESS;
+  }
+
+  auto function_expr = static_cast<FunctionExpr *>(expr.get());
+  vector<unique_ptr<Expression>> &arguments = function_expr->arguments();
+
+  for (unique_ptr<Expression> &argument_expr : arguments) {
+    vector<unique_ptr<Expression>> child_bound_expressions;
+    RC rc = bind_expression(argument_expr, child_bound_expressions);
+    if (OB_FAIL(rc)) {
+      return rc;
+    }
+
+    if (child_bound_expressions.size() != 1) {
+      LOG_WARN("invalid argument number after binding function argument. function=%s, count=%d",
+          function_expr->function_name(), static_cast<int>(child_bound_expressions.size()));
+      return RC::INVALID_ARGUMENT;
+    }
+
+    unique_ptr<Expression> &argument = child_bound_expressions[0];
+    if (argument.get() != argument_expr.get()) {
+      argument_expr.reset(argument.release());
+    }
+  }
+
+  const char *function_name = function_expr->function_name();
+  if (0 == strcasecmp(function_name, "VECTOR_TO_STRING")) {
+    if (arguments.size() != 1) {
+      LOG_WARN("VECTOR_TO_STRING expects 1 argument, got %d", static_cast<int>(arguments.size()));
+      return RC::INVALID_ARGUMENT;
+    }
+
+    if (arguments[0]->value_type() != AttrType::VECTORS) {
+      LOG_WARN("VECTOR_TO_STRING expects vector argument, got %s",
+          attr_type_to_string(arguments[0]->value_type()));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+  } else if (0 == strcasecmp(function_name, "DISTANCE")) {
+    if (arguments.size() != 3) {
+      LOG_WARN("DISTANCE expects 3 arguments, got %d", static_cast<int>(arguments.size()));
+      return RC::INVALID_ARGUMENT;
+    }
+
+    if (arguments[0]->type() != ExprType::FIELD || arguments[0]->value_type() != AttrType::VECTORS) {
+      LOG_WARN("DISTANCE first argument must be a vector field");
+      return RC::INVALID_ARGUMENT;
+    }
+
+    if (arguments[1]->value_type() != AttrType::VECTORS) {
+      LOG_WARN("DISTANCE second argument must be vector, got %s",
+          attr_type_to_string(arguments[1]->value_type()));
+      return RC::SCHEMA_FIELD_TYPE_MISMATCH;
+    }
+
+    if (arguments[2]->type() != ExprType::VALUE || arguments[2]->value_type() != AttrType::CHARS) {
+      LOG_WARN("DISTANCE third argument must be a quoted string");
+      return RC::INVALID_ARGUMENT;
+    }
+  } else {
+    LOG_WARN("unsupported function. name=%s", function_name);
+    return RC::UNIMPLEMENTED;
   }
 
   bound_expressions.emplace_back(std::move(expr));

@@ -113,6 +113,8 @@ CHAR                                    RETURN_TOKEN(STRING_T);
 FLOAT                                   RETURN_TOKEN(FLOAT_T);
 VECTOR                                  RETURN_TOKEN(VECTOR_T);
 STRING_TO_VECTOR                        RETURN_TOKEN(STRING_TO_VECTOR);
+VECTOR_TO_STRING                        RETURN_TOKEN(VECTOR_TO_STRING);
+DISTANCE                                RETURN_TOKEN(DISTANCE);
 LOAD                                    RETURN_TOKEN(LOAD);
 DATA                                    RETURN_TOKEN(DATA);
 INFILE                                  RETURN_TOKEN(INFILE);

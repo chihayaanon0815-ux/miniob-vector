@@ -41,3 +41,8 @@ bool is_string_type(AttrType type)
 {
   return (type == AttrType::CHARS);
 }
+
+bool is_vector_type(AttrType type)
+{
+  return (type == AttrType::VECTORS);
+}

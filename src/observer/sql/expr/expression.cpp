@@ -15,6 +15,7 @@ See the Mulan PSL v2 for more details. */
 #include "sql/expr/expression.h"
 #include "sql/expr/tuple.h"
 #include "sql/expr/arithmetic_operator.hpp"
+#include "common/type/vector_type.h"
 
 using namespace std;
 
@@ -602,6 +603,191 @@ RC ArithmeticExpr::try_get_value(Value &value) const
   }
 
   return calc_value(left_value, right_value, value);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+FunctionExpr::FunctionExpr(const char *function_name, vector<unique_ptr<Expression>> &arguments)
+    : function_name_(function_name), arguments_(std::move(arguments))
+{}
+
+FunctionExpr::FunctionExpr(const string &function_name, vector<unique_ptr<Expression>> arguments)
+    : function_name_(function_name), arguments_(std::move(arguments))
+{}
+
+unique_ptr<Expression> FunctionExpr::copy() const
+{
+  vector<unique_ptr<Expression>> arguments;
+  for (const unique_ptr<Expression> &argument : arguments_) {
+    arguments.emplace_back(argument->copy());
+  }
+  auto expr = make_unique<FunctionExpr>(function_name_, std::move(arguments));
+  expr->set_name(name());
+  return expr;
+}
+
+bool FunctionExpr::equal(const Expression &other) const
+{
+  if (this == &other) {
+    return true;
+  }
+  if (other.type() != ExprType::FUNCTION) {
+    return false;
+  }
+
+  const auto &other_func = static_cast<const FunctionExpr &>(other);
+  if (0 != strcasecmp(function_name_.c_str(), other_func.function_name()) ||
+      arguments_.size() != other_func.arguments_.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < arguments_.size(); i++) {
+    if (!arguments_[i]->equal(*other_func.arguments_[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+AttrType FunctionExpr::value_type() const
+{
+  if (0 == strcasecmp(function_name_.c_str(), "VECTOR_TO_STRING")) {
+    return AttrType::CHARS;
+  }
+  if (0 == strcasecmp(function_name_.c_str(), "DISTANCE")) {
+    return AttrType::FLOATS;
+  }
+  return AttrType::UNDEFINED;
+}
+
+int FunctionExpr::value_length() const
+{
+  if (0 == strcasecmp(function_name_.c_str(), "DISTANCE")) {
+    return sizeof(float);
+  }
+
+  if (0 == strcasecmp(function_name_.c_str(), "VECTOR_TO_STRING")) {
+    if (arguments_.empty()) {
+      return 256;
+    }
+
+    int vector_length = arguments_[0]->value_length();
+    if (vector_length <= 0 || vector_length % static_cast<int>(sizeof(float)) != 0) {
+      return 256;
+    }
+
+    int dimension = vector_length / static_cast<int>(sizeof(float));
+    return max(2, dimension * 16 + 2);
+  }
+
+  return -1;
+}
+
+RC FunctionExpr::calc_value(const vector<Value> &argument_values, Value &value) const
+{
+  if (0 == strcasecmp(function_name_.c_str(), "VECTOR_TO_STRING")) {
+    if (argument_values.size() != 1) {
+      return RC::INVALID_ARGUMENT;
+    }
+
+    string result;
+    RC rc = VectorType::vector_to_string(argument_values[0], result);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+
+    value.set_string(result.c_str());
+    return RC::SUCCESS;
+  }
+
+  if (0 == strcasecmp(function_name_.c_str(), "DISTANCE")) {
+    if (argument_values.size() != 3 || argument_values[2].attr_type() != AttrType::CHARS) {
+      return RC::INVALID_ARGUMENT;
+    }
+    return VectorType::distance(argument_values[0], argument_values[1], argument_values[2].get_string(), value);
+  }
+
+  return RC::UNIMPLEMENTED;
+}
+
+RC FunctionExpr::get_value(const Tuple &tuple, Value &value) const
+{
+  vector<Value> argument_values;
+  argument_values.reserve(arguments_.size());
+
+  for (const unique_ptr<Expression> &argument : arguments_) {
+    Value argument_value;
+    RC rc = argument->get_value(tuple, argument_value);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get function argument value. function=%s, rc=%s", function_name_.c_str(), strrc(rc));
+      return rc;
+    }
+    argument_values.emplace_back(std::move(argument_value));
+  }
+
+  return calc_value(argument_values, value);
+}
+
+RC FunctionExpr::try_get_value(Value &value) const
+{
+  vector<Value> argument_values;
+  argument_values.reserve(arguments_.size());
+
+  for (const unique_ptr<Expression> &argument : arguments_) {
+    Value argument_value;
+    RC rc = argument->try_get_value(argument_value);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    argument_values.emplace_back(std::move(argument_value));
+  }
+
+  return calc_value(argument_values, value);
+}
+
+RC FunctionExpr::get_column(Chunk &chunk, Column &column)
+{
+  RC rc = RC::SUCCESS;
+
+  vector<Column> argument_columns;
+  argument_columns.reserve(arguments_.size());
+  int rows = 0;
+
+  for (unique_ptr<Expression> &argument : arguments_) {
+    Column argument_column;
+    rc = argument->get_column(chunk, argument_column);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to get function argument column. function=%s, rc=%s", function_name_.c_str(), strrc(rc));
+      return rc;
+    }
+    rows = max(rows, argument_column.count());
+    argument_columns.emplace_back(std::move(argument_column));
+  }
+
+  column.init(value_type(), value_length(), rows);
+  for (int row = 0; row < rows; row++) {
+    vector<Value> argument_values;
+    argument_values.reserve(argument_columns.size());
+
+    for (const Column &argument_column : argument_columns) {
+      argument_values.emplace_back(argument_column.get_value(row));
+    }
+
+    Value result;
+    rc = calc_value(argument_values, result);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to calculate function value. function=%s, rc=%s", function_name_.c_str(), strrc(rc));
+      return rc;
+    }
+
+    rc = column.append_value(result);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to append function result. function=%s, rc=%s", function_name_.c_str(), strrc(rc));
+      return rc;
+    }
+  }
+
+  return RC::SUCCESS;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
