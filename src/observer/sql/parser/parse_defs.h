@@ -86,12 +86,24 @@ struct ConditionSqlNode
  * 甚至可以包含复杂的表达式。
  */
 
+/**
+ * @brief 描述一个排序表达式
+ * @ingroup SQLParser
+ */
+struct OrderBySqlNode
+{
+  unique_ptr<Expression> expr;
+  bool                   is_asc = true;
+};
+
 struct SelectSqlNode
 {
-  vector<unique_ptr<Expression>> expressions;  ///< 查询的表达式
-  vector<string>                 relations;    ///< 查询的表
-  vector<ConditionSqlNode>       conditions;   ///< 查询条件，使用AND串联起来多个条件
-  vector<unique_ptr<Expression>> group_by;     ///< group by clause
+  vector<unique_ptr<Expression>>  expressions;     ///< 查询的表达式
+  vector<string>                  relations;       ///< 查询的表
+  vector<ConditionSqlNode>        conditions;      ///< 查询条件，使用AND串联起来多个条件
+  vector<unique_ptr<Expression>>  group_by;        ///< group by clause
+  vector<unique_ptr<OrderBySqlNode>> order_by;     ///< order by clause
+  int                             limit_num = -1;  ///< limit, -1 means no limit
 };
 
 /**
@@ -182,6 +194,16 @@ struct AnalyzeTableSqlNode
 };
 
 /**
+ * @brief WITH 子句选项，用于 CREATE VECTOR INDEX
+ * @ingroup SQLParser
+ */
+struct WithClauseOptions
+{
+  int lists  = 1;
+  int probes = 1;
+};
+
+/**
  * @brief 描述一个create index语句
  * @ingroup SQLParser
  * @details 创建索引时，需要指定索引名，表名，字段名。
@@ -192,6 +214,9 @@ struct CreateIndexSqlNode
   string index_name;      ///< Index name
   string relation_name;   ///< Relation name
   string attribute_name;  ///< Attribute name
+  int    index_type = 0;  ///< Index type: 0=BTREE, 1=IVFFLAT
+  int    lists      = 1;  ///< IVF lists (number of clusters)
+  int    probes     = 1;  ///< IVF probes (number of clusters to search)
 };
 
 /**

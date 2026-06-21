@@ -51,6 +51,17 @@ public:
 
   virtual bool is_vector_index() { return false; }
 
+  /**
+   * @brief 向量近似最近邻搜索
+   * @param base_vector 查询向量
+   * @param limit 返回的最大结果数
+   * @return 按照距离排序的 RID 列表
+   */
+  virtual vector<RID> ann_search(const vector<float> &base_vector, size_t limit)
+  {
+    return {};
+  }
+
   const IndexMeta &index_meta() const { return index_meta_; }
 
   /**

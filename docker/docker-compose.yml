@@ -10,6 +10,8 @@ services:
     ports:
       - "10000:22"
     restart: unless-stopped
+    volumes:
+      - ../:/root/miniob
     environment:
       #  set the env argument PRIVATE_KEY when using ssh clone
       #  REPO_ADDR format in a private repo: https://<username>:<password>@github.com/oceanbase/miniob.git, '@' in username must be escape to '%40'

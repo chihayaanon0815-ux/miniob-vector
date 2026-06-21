@@ -42,6 +42,13 @@ See the Mulan PSL v2 for more details. */
 #include "sql/operator/hash_group_by_physical_operator.h"
 #include "sql/operator/scalar_group_by_physical_operator.h"
 #include "sql/operator/table_scan_vec_physical_operator.h"
+#include "sql/operator/sort_logical_operator.h"
+#include "sql/operator/sort_physical_operator.h"
+#include "sql/operator/limit_logical_operator.h"
+#include "sql/operator/limit_physical_operator.h"
+#include "sql/operator/vector_index_scan_physical_operator.h"
+#include "storage/index/ivfflat_index.h"
+#include "common/type/vector_type.h"
 #include "sql/optimizer/physical_plan_generator.h"
 
 using namespace std;
@@ -85,6 +92,14 @@ RC PhysicalPlanGenerator::create(LogicalOperator &logical_operator, unique_ptr<P
 
     case LogicalOperatorType::GROUP_BY: {
       return create_plan(static_cast<GroupByLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    case LogicalOperatorType::SORT: {
+      return create_plan(static_cast<SortLogicalOperator &>(logical_operator), oper, session);
+    } break;
+
+    case LogicalOperatorType::LIMIT: {
+      return create_plan(static_cast<LimitLogicalOperator &>(logical_operator), oper, session);
     } break;
 
     default: {
@@ -368,6 +383,157 @@ RC PhysicalPlanGenerator::create_plan(GroupByLogicalOperator &logical_oper, uniq
   group_by_oper->add_child(std::move(child_physical_oper));
 
   oper = std::move(group_by_oper);
+  return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(SortLogicalOperator &sort_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
+{
+  vector<unique_ptr<LogicalOperator>> &child_opers = sort_oper.children();
+
+  // Check if any sort expression is DISTANCE on a vector-indexed field
+  IvfflatIndex *vector_index = nullptr;
+  Table        *vector_table = nullptr;
+  Value         query_vector_value;
+  int           ann_limit = 1000;  // generous default
+
+  for (auto &expr : sort_oper.sort_expressions()) {
+    if (expr->type() == ExprType::FUNCTION) {
+      auto func_expr = static_cast<FunctionExpr *>(expr.get());
+      if (0 == strcasecmp(func_expr->function_name(), "DISTANCE")) {
+        auto &args = func_expr->arguments();
+        if (args.size() >= 2) {
+          for (size_t i = 0; i < 2; i++) {
+            if (args[i]->type() == ExprType::FIELD) {
+              auto field_expr = static_cast<FieldExpr *>(args[i].get());
+              // Get the table from the child operator (TableGetLogicalOperator)
+              if (!child_opers.empty()) {
+                // Walk down to find TableGetLogicalOperator
+                LogicalOperator *current = child_opers.front().get();
+                while (current != nullptr) {
+                  if (current->type() == LogicalOperatorType::TABLE_GET) {
+                    auto table_get = static_cast<TableGetLogicalOperator *>(current);
+                    Table *table = table_get->table();
+                    Index *idx = table->find_index_by_field(field_expr->field_name());
+                    if (idx != nullptr && idx->is_vector_index()) {
+                      vector_index = static_cast<IvfflatIndex *>(idx);
+                      vector_table = table;
+                      // Get the query vector from the other argument
+                      size_t other = (i == 0) ? 1 : 0;
+                      if (args[other]->type() == ExprType::VALUE) {
+                        query_vector_value = static_cast<ValueExpr *>(args[other].get())->get_value();
+                      } else if (args[other]->type() == ExprType::FUNCTION) {
+                        // Handle STRING_TO_VECTOR function
+                        auto qfunc = static_cast<FunctionExpr *>(args[other].get());
+                        if (0 == strcasecmp(qfunc->function_name(), "STRING_TO_VECTOR")) {
+                          auto &qargs = qfunc->arguments();
+                          if (!qargs.empty() && qargs[0]->type() == ExprType::VALUE) {
+                            Value str_val = static_cast<ValueExpr *>(qargs[0].get())->get_value();
+                            Value vec_val;
+                            RC parse_rc = VectorType::parse_vector(str_val.get_string().c_str(), vec_val);
+                            if (parse_rc == RC::SUCCESS) {
+                              query_vector_value = vec_val;
+                            }
+                          }
+                        }
+                      }
+                      break;
+                    }
+                  }
+                  if (!current->children().empty()) {
+                    current = current->children().front().get();
+                  } else {
+                    break;
+                  }
+                }
+              }
+            }
+            if (vector_index != nullptr) break;
+          }
+        }
+      }
+    }
+    if (vector_index != nullptr) break;
+  }
+
+  if (vector_index != nullptr && vector_table != nullptr) {
+    // Extract query vector from Value
+    int dim = query_vector_value.length() / sizeof(float);
+    const float *data = reinterpret_cast<const float *>(query_vector_value.data());
+    vector<float> query_vec(data, data + dim);
+
+    // Create VectorIndexScan to get approximate results
+    auto vec_scan_oper = make_unique<VectorIndexScanPhysicalOperator>(
+        vector_table, vector_index, query_vec, ann_limit);
+    // Open and close are handled by parent
+
+    // Create Sort on top of VectorIndexScan for re-ranking
+    vector<unique_ptr<Expression>> sort_exprs;
+    for (auto &expr : sort_oper.sort_expressions()) {
+      sort_exprs.emplace_back(expr->copy());
+    }
+    vector<bool> sort_is_asc = sort_oper.is_asc();
+
+    auto sort_operator = make_unique<SortPhysicalOperator>(std::move(sort_exprs), std::move(sort_is_asc));
+    sort_operator->add_child(std::move(vec_scan_oper));
+
+    oper = std::move(sort_operator);
+    LOG_TRACE("create a sort physical operator with vector index scan");
+    return RC::SUCCESS;
+  }
+
+  // Normal sort path
+  unique_ptr<PhysicalOperator> child_phy_oper;
+
+  RC rc = RC::SUCCESS;
+  if (!child_opers.empty()) {
+    LogicalOperator *child_oper = child_opers.front().get();
+    rc = create(*child_oper, child_phy_oper, session);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create sort's child physical operator. rc=%s", strrc(rc));
+      return rc;
+    }
+  }
+
+  vector<unique_ptr<Expression>> sort_exprs;
+  for (auto &expr : sort_oper.sort_expressions()) {
+    sort_exprs.emplace_back(expr->copy());
+  }
+
+  vector<bool> sort_is_asc = sort_oper.is_asc();  // copy
+
+  auto sort_operator = make_unique<SortPhysicalOperator>(std::move(sort_exprs), std::move(sort_is_asc));
+  if (child_phy_oper) {
+    sort_operator->add_child(std::move(child_phy_oper));
+  }
+
+  oper = std::move(sort_operator);
+  LOG_TRACE("create a sort physical operator");
+  return rc;
+}
+
+RC PhysicalPlanGenerator::create_plan(LimitLogicalOperator &limit_oper, unique_ptr<PhysicalOperator> &oper, Session* session)
+{
+  vector<unique_ptr<LogicalOperator>> &child_opers = limit_oper.children();
+
+  unique_ptr<PhysicalOperator> child_phy_oper;
+
+  RC rc = RC::SUCCESS;
+  if (!child_opers.empty()) {
+    LogicalOperator *child_oper = child_opers.front().get();
+    rc = create(*child_oper, child_phy_oper, session);
+    if (OB_FAIL(rc)) {
+      LOG_WARN("failed to create limit's child physical operator. rc=%s", strrc(rc));
+      return rc;
+    }
+  }
+
+  auto limit_operator = make_unique<LimitPhysicalOperator>(limit_oper.limit_num());
+  if (child_phy_oper) {
+    limit_operator->add_child(std::move(child_phy_oper));
+  }
+
+  oper = std::move(limit_operator);
+  LOG_TRACE("create a limit physical operator");
   return rc;
 }
 

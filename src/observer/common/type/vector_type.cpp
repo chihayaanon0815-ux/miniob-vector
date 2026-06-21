@@ -24,6 +24,23 @@ static RC check_vector_value(const Value &value, const float *&data, int &dimens
   return RC::SUCCESS;
 }
 
+static RC check_vector_dimension(const Value &left, const Value &right, const float *&left_data, const float *&right_data, int &dimension)
+{
+  RC rc = check_vector_value(left, left_data, dimension);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  int right_dimension = 0;
+  rc = check_vector_value(right, right_data, right_dimension);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  if (dimension != right_dimension) {
+    return RC::INVALID_ARGUMENT;
+  }
+  return RC::SUCCESS;
+}
+
 static RC normalize_distance_method(string method, string &normalized)
 {
   common::strip(method);
@@ -56,7 +73,21 @@ int VectorType::compare(const Value &left, const Value &right) const
     return 0;
   }
 
-  return std::memcmp(left.data(), right.data(), left.length());
+  const float *left_data = nullptr;
+  const float *right_data = nullptr;
+  int dimension = 0;
+  RC rc = check_vector_dimension(left, right, left_data, right_data, dimension);
+  if (rc != RC::SUCCESS) {
+    return INT32_MAX;
+  }
+  for (int i = 0; i < dimension; i++) {
+    if (left_data[i] < right_data[i]) {
+      return -1;
+    } else if (left_data[i] > right_data[i]) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 RC VectorType::parse_vector(const char *text, Value &value)
@@ -111,6 +142,24 @@ RC VectorType::parse_vector(const char *text, Value &value)
   return RC::SUCCESS;
 }
 
+RC VectorType::cast_to(const Value &val, AttrType type, Value &result) const
+{
+  if (type == AttrType::CHARS) {
+    string str;
+    RC rc = vector_to_string(val, str);
+    if (rc != RC::SUCCESS) {
+      return rc;
+    }
+    result.set_string(str.c_str());
+    return RC::SUCCESS;
+  }
+  if (type == AttrType::VECTORS) {
+    result.set_vector(val.data(), val.length());
+    return RC::SUCCESS;
+  }
+  return RC::UNIMPLEMENTED;
+}
+
 RC VectorType::vector_to_string(const Value &value, string &result)
 {
   const float *data      = nullptr;
@@ -128,6 +177,57 @@ RC VectorType::vector_to_string(const Value &value, string &result)
     result += common::double_to_str(data[i]);
   }
   result += "]";
+  return RC::SUCCESS;
+}
+
+RC VectorType::add(const Value &left, const Value &right, Value &result) const
+{
+  const float *left_data = nullptr;
+  const float *right_data = nullptr;
+  int dimension = 0;
+  RC rc = check_vector_dimension(left, right, left_data, right_data, dimension);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  vector<float> output(dimension);
+  for (int i = 0; i < dimension; i++) {
+    output[i] = left_data[i] + right_data[i];
+  }
+  result.set_vector(reinterpret_cast<const char *>(output.data()), dimension * sizeof(float));
+  return RC::SUCCESS;
+}
+
+RC VectorType::subtract(const Value &left, const Value &right, Value &result) const
+{
+  const float *left_data = nullptr;
+  const float *right_data = nullptr;
+  int dimension = 0;
+  RC rc = check_vector_dimension(left, right, left_data, right_data, dimension);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  vector<float> output(dimension);
+  for (int i = 0; i < dimension; i++) {
+    output[i] = left_data[i] - right_data[i];
+  }
+  result.set_vector(reinterpret_cast<const char *>(output.data()), dimension * sizeof(float));
+  return RC::SUCCESS;
+}
+
+RC VectorType::multiply(const Value &left, const Value &right, Value &result) const
+{
+  const float *left_data = nullptr;
+  const float *right_data = nullptr;
+  int dimension = 0;
+  RC rc = check_vector_dimension(left, right, left_data, right_data, dimension);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  vector<float> output(dimension);
+  for (int i = 0; i < dimension; i++) {
+    output[i] = left_data[i] * right_data[i];
+  }
+  result.set_vector(reinterpret_cast<const char *>(output.data()), dimension * sizeof(float));
   return RC::SUCCESS;
 }
 

@@ -28,9 +28,11 @@ bool LogicalOperator::can_generate_vectorized_operator(const LogicalOperatorType
   case LogicalOperatorType::CALC:
   case LogicalOperatorType::DELETE:
   case LogicalOperatorType::INSERT:
+  case LogicalOperatorType::SORT:
+  case LogicalOperatorType::LIMIT:
     bool_ret = false;
     break;
-  
+
   default:
     bool_ret = true;
     break;

@@ -25,6 +25,15 @@ class Value;
 }  // namespace Json
 
 /**
+ * @brief 索引类型
+ */
+enum class IndexType
+{
+  BTREE,
+  IVFFLAT,
+};
+
+/**
  * @brief 描述一个索引
  * @ingroup Index
  * @details 一个索引包含了表的哪些字段，索引的名称等。
@@ -36,10 +45,14 @@ public:
   IndexMeta() = default;
 
   RC init(const char *name, const FieldMeta &field);
+  RC init(const char *name, const FieldMeta &field, IndexType type, int lists, int probes);
 
 public:
-  const char *name() const;
-  const char *field() const;
+  const char   *name() const;
+  const char   *field() const;
+  IndexType     index_type() const { return index_type_; }
+  int           lists() const { return lists_; }
+  int           probes() const { return probes_; }
 
   void desc(ostream &os) const;
 
@@ -48,6 +61,9 @@ public:
   static RC from_json(const TableMeta &table, const Json::Value &json_value, IndexMeta &index);
 
 protected:
-  string name_;   // index's name
-  string field_;  // field's name
+  string    name_;
+  string    field_;
+  IndexType index_type_ = IndexType::BTREE;
+  int       lists_      = 1;
+  int       probes_     = 1;
 };

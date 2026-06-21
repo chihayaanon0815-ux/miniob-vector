@@ -21,6 +21,9 @@ See the Mulan PSL v2 for more details. */
 
 const static Json::StaticString FIELD_NAME("name");
 const static Json::StaticString FIELD_FIELD_NAME("field_name");
+const static Json::StaticString FIELD_INDEX_TYPE("index_type");
+const static Json::StaticString FIELD_LISTS("lists");
+const static Json::StaticString FIELD_PROBES("probes");
 
 RC IndexMeta::init(const char *name, const FieldMeta &field)
 {
@@ -34,10 +37,27 @@ RC IndexMeta::init(const char *name, const FieldMeta &field)
   return RC::SUCCESS;
 }
 
+RC IndexMeta::init(const char *name, const FieldMeta &field, IndexType type, int lists, int probes)
+{
+  RC rc = init(name, field);
+  if (rc != RC::SUCCESS) {
+    return rc;
+  }
+  index_type_ = type;
+  lists_      = lists;
+  probes_     = probes;
+  return RC::SUCCESS;
+}
+
 void IndexMeta::to_json(Json::Value &json_value) const
 {
   json_value[FIELD_NAME]       = name_;
   json_value[FIELD_FIELD_NAME] = field_;
+  json_value[FIELD_INDEX_TYPE] = static_cast<int>(index_type_);
+  if (index_type_ == IndexType::IVFFLAT) {
+    json_value[FIELD_LISTS]  = lists_;
+    json_value[FIELD_PROBES] = probes_;
+  }
 }
 
 RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, IndexMeta &index)
@@ -61,11 +81,28 @@ RC IndexMeta::from_json(const TableMeta &table, const Json::Value &json_value, I
     return RC::SCHEMA_FIELD_MISSING;
   }
 
-  return index.init(name_value.asCString(), *field);
+  const Json::Value &type_value = json_value[FIELD_INDEX_TYPE];
+  IndexType idx_type = IndexType::BTREE;
+  if (type_value.isInt()) {
+    idx_type = static_cast<IndexType>(type_value.asInt());
+  }
+  const Json::Value &lists_value = json_value[FIELD_LISTS];
+  int lists = lists_value.isInt() ? lists_value.asInt() : 1;
+  const Json::Value &probes_value = json_value[FIELD_PROBES];
+  int probes = probes_value.isInt() ? probes_value.asInt() : 1;
+
+  return index.init(name_value.asCString(), *field, idx_type, lists, probes);
 }
 
 const char *IndexMeta::name() const { return name_.c_str(); }
 
 const char *IndexMeta::field() const { return field_.c_str(); }
 
-void IndexMeta::desc(ostream &os) const { os << "index name=" << name_ << ", field=" << field_; }
+void IndexMeta::desc(ostream &os) const
+{
+  os << "index name=" << name_ << ", field=" << field_
+     << ", type=" << (index_type_ == IndexType::BTREE ? "btree" : "ivfflat");
+  if (index_type_ == IndexType::IVFFLAT) {
+    os << ", lists=" << lists_ << ", probes=" << probes_;
+  }
+}

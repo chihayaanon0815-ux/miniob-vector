@@ -126,12 +126,17 @@ FunctionExpr *create_function_expression(const char *function_name,
         FIELDS
         TERMINATED
         ENCLOSED
+        ORDER
+        AS
+        LIMIT
+        ASC
         EQ
         LT
         GT
         LE
         GE
         NE
+        WITH
 
 /** union 中定义各种数据类型，真实生成的代码也是union类型，所以不能有非POD类型的数据 **/
 %union {
@@ -149,9 +154,12 @@ FunctionExpr *create_function_expression(const char *function_name,
   vector<RelAttrSqlNode> *                   rel_attr_list;
   vector<string> *                           relation_list;
   vector<string> *                           key_list;
+  OrderBySqlNode *                           order_expr;
+  vector<unique_ptr<OrderBySqlNode>> *       order_expr_list;
   char *                                     cstring;
   int                                        number;
   float                                      floats;
+  WithClauseOptions *                        with_options;
 }
 
 %destructor { delete $$; } <condition>
@@ -162,6 +170,9 @@ FunctionExpr *create_function_expression(const char *function_name,
 %destructor { delete $$; } <expression_list>
 %destructor { delete $$; } <value_list>
 %destructor { delete $$; } <condition_list>
+%destructor { delete $$; } <order_expr>
+%destructor { delete $$; } <order_expr_list>
+%destructor { delete $$; } <with_options>
 // %destructor { delete $$; } <rel_attr_list>
 %destructor { delete $$; } <relation_list>
 %destructor { delete $$; } <key_list>
@@ -194,6 +205,10 @@ FunctionExpr *create_function_expression(const char *function_name,
 %type <expression>          function_expression
 %type <expression_list>     expression_list
 %type <expression_list>     group_by
+%type <order_expr>          order_expr
+%type <order_expr_list>     order_expr_list
+%type <order_expr_list>     order_by
+%type <number>              limit_clause
 %type <cstring>             fields_terminated_by
 %type <cstring>             enclosed_by
 %type <sql_node>            calc_stmt
@@ -218,6 +233,7 @@ FunctionExpr *create_function_expression(const char *function_name,
 %type <sql_node>            help_stmt
 %type <sql_node>            exit_stmt
 %type <sql_node>            command_wrapper
+%type <with_options>        with_clause
 // commands should be a list but I use a single command instead
 %type <sql_node>            commands
 
@@ -326,6 +342,18 @@ create_index_stmt:    /*create index 语句的语法解析树*/
       create_index.index_name = $3;
       create_index.relation_name = $5;
       create_index.attribute_name = $7;
+    }
+    | CREATE VECTOR_T INDEX ID ON ID LBRACE ID RBRACE with_clause
+    {
+      $$ = new ParsedSqlNode(SCF_CREATE_INDEX);
+      CreateIndexSqlNode &create_index = $$->create_index;
+      create_index.index_type = static_cast<int>(IndexType::IVFFLAT);
+      create_index.index_name = $4;
+      create_index.relation_name = $6;
+      create_index.attribute_name = $8;
+      create_index.lists  = $10->lists;
+      create_index.probes = $10->probes;
+      delete $10;
     }
     ;
 
@@ -521,7 +549,7 @@ update_stmt:      /*  update 语句的语法解析树*/
     }
     ;
 select_stmt:        /*  select 语句的语法解析树*/
-    SELECT expression_list FROM rel_list where group_by
+    SELECT expression_list FROM rel_list where group_by order_by limit_clause
     {
       $$ = new ParsedSqlNode(SCF_SELECT);
       if ($2 != nullptr) {
@@ -543,6 +571,13 @@ select_stmt:        /*  select 语句的语法解析树*/
         $$->selection.group_by.swap(*$6);
         delete $6;
       }
+
+      if ($7 != nullptr) {
+        $$->selection.order_by.swap(*$7);
+        delete $7;
+      }
+
+      $$->selection.limit_num = $8;
     }
     ;
 calc_stmt:
@@ -609,6 +644,10 @@ expression:
     }
     | function_expression {
       $$ = $1;
+    }
+    | expression AS ID {
+      $$ = $1;
+      $$->set_name($3);
     }
     ;
 
@@ -815,6 +854,86 @@ set_variable_stmt:
       $$->set_variable.name  = $2;
       $$->set_variable.value = *$4;
       delete $4;
+    }
+    ;
+
+order_by:
+    /* empty */
+    {
+      $$ = nullptr;
+    }
+    | ORDER BY order_expr_list
+    {
+      $$ = $3;
+    }
+    ;
+
+order_expr_list:
+    order_expr
+    {
+      $$ = new vector<unique_ptr<OrderBySqlNode>>;
+      $$->emplace_back($1);
+    }
+    | order_expr COMMA order_expr_list
+    {
+      if ($3 != nullptr) {
+        $$ = $3;
+      } else {
+        $$ = new vector<unique_ptr<OrderBySqlNode>>;
+      }
+      $$->emplace($$->begin(), $1);
+    }
+    ;
+
+order_expr:
+    expression
+    {
+      $$ = new OrderBySqlNode;
+      $$->expr = unique_ptr<Expression>($1);
+      $$->is_asc = true;
+    }
+    | expression ASC
+    {
+      $$ = new OrderBySqlNode;
+      $$->expr = unique_ptr<Expression>($1);
+      $$->is_asc = true;
+    }
+    | expression DESC
+    {
+      $$ = new OrderBySqlNode;
+      $$->expr = unique_ptr<Expression>($1);
+      $$->is_asc = false;
+    }
+    ;
+
+limit_clause:
+    /* empty */
+    {
+      $$ = -1;
+    }
+    | LIMIT NUMBER
+    {
+      $$ = $2;
+    }
+    ;
+
+with_clause:
+    /* empty */
+    {
+      $$ = new WithClauseOptions;
+    }
+    | WITH LBRACE ID EQ NUMBER COMMA ID EQ NUMBER RBRACE
+    {
+      $$ = new WithClauseOptions;
+      int val1 = $5, val2 = $9;
+      const char *key1 = $3, *key2 = $7;
+      if (strcasecmp(key1, "lists") == 0 && strcasecmp(key2, "probes") == 0) {
+        $$->lists  = val1;
+        $$->probes = val2;
+      } else if (strcasecmp(key1, "probes") == 0 && strcasecmp(key2, "lists") == 0) {
+        $$->lists  = val2;
+        $$->probes = val1;
+      }
     }
     ;
 

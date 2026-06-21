@@ -30,3 +30,11 @@ src/observer/sql/parser/lex_sql.cpp
 src/observer/sql/parser/lex_sql.h
 src/observer/sql/parser/yacc_sql.cpp
 src/observer/sql/parser/yacc_sql.hpp
+
+# ignore logs and test artifacts
+*.log
+*.log.*
+miniob/
+bplus_tree_log_test_dir/
+observer.log*
+.miniob.history

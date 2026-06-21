@@ -43,6 +43,10 @@ public:
   void set_buffer_pool_id(int buffer_pool_id) { buffer_pool_id_ = buffer_pool_id; }
   void set_page_num(PageNum page_num) { page_num_ = page_num; }
 
+  // 强制写锁解锁（允许跨线程释放锁，用于 LatchMemo 在回收时的场景）
+  void force_write_unlatch();
+  // 强制读锁解锁（允许跨线程释放读锁）
+  void force_read_unlatch();
   string to_string() const;
 
 private:
@@ -159,9 +163,15 @@ public:
   void write_unlatch();
   void write_unlatch(intptr_t xid);
 
+  // 强制写锁解锁（允许跨线程释放锁，用于 LatchMemo 在回收时的场景）
+  void force_write_unlatch();
+
   void read_latch();
   void read_latch(intptr_t xid);
   bool try_read_latch();
+
+  // 强制读锁解锁（允许跨线程释放读锁）
+  void force_read_unlatch();
 
   void read_unlatch();
   void read_unlatch(intptr_t xid);

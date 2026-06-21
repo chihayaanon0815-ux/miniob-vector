@@ -152,11 +152,6 @@ RC ComparisonExpr::compare_value(const Value &left, const Value &right, bool &re
       return RC::INTERNAL;
     }
 
-    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
-      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_);
-      return RC::INTERNAL;
-    }
-
     if (left.length() != right.length()) {
       LOG_WARN("cannot compare vectors with different lengths. left=%d, right=%d", left.length(), right.length());
       return RC::INTERNAL;
@@ -262,11 +257,6 @@ RC ComparisonExpr::eval(Chunk &chunk, vector<uint8_t> &select)
   }
 
   if (left_column.attr_type() == AttrType::VECTORS) {
-    if (comp_ != EQUAL_TO && comp_ != NOT_EQUAL) {
-      LOG_WARN("vector only supports equal and not equal comparison. comp=%d", comp_);
-      return RC::INTERNAL;
-    }
-
     int rows = 0;
     if (left_column.column_type() == Column::Type::CONSTANT_COLUMN) {
       rows = right_column.count();
@@ -401,8 +391,12 @@ AttrType ArithmeticExpr::value_type() const
     return left_->value_type();
   }
 
+  if (left_->value_type() == AttrType::VECTORS && right_->value_type() == AttrType::VECTORS) {
+    return AttrType::VECTORS;
+  }
+
   if ((left_->value_type() == AttrType::INTS) &&
-   (right_->value_type() == AttrType::INTS) &&
+      (right_->value_type() == AttrType::INTS) &&
       arithmetic_type_ != Type::DIV) {
     return AttrType::INTS;
   }
@@ -459,6 +453,20 @@ RC ArithmeticExpr::execute_calc(
       } else if (attr_type == AttrType::FLOATS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, AddOperator>(
             (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::VECTORS) {
+        int dims = result.attr_len() / static_cast<int>(sizeof(float));
+        int rows = result.capacity();
+        float *result_data = (float *)result.data();
+        const float *left_data = (const float *)left.data();
+        const float *right_data = (const float *)right.data();
+        for (int row = 0; row < rows; row++) {
+          const float *left_row = left_data + (LEFT_CONSTANT ? 0 : row * dims);
+          const float *right_row = right_data + (RIGHT_CONSTANT ? 0 : row * dims);
+          float *output_row = result_data + row * dims;
+          for (int j = 0; j < dims; j++) {
+            output_row[j] = AddOperator::template operation<float>(left_row[j], right_row[j]);
+          }
+        }
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -470,6 +478,20 @@ RC ArithmeticExpr::execute_calc(
       } else if (attr_type == AttrType::FLOATS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, SubtractOperator>(
             (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::VECTORS) {
+        int dims = result.attr_len() / static_cast<int>(sizeof(float));
+        int rows = result.capacity();
+        float *result_data = (float *)result.data();
+        const float *left_data = (const float *)left.data();
+        const float *right_data = (const float *)right.data();
+        for (int row = 0; row < rows; row++) {
+          const float *left_row = left_data + (LEFT_CONSTANT ? 0 : row * dims);
+          const float *right_row = right_data + (RIGHT_CONSTANT ? 0 : row * dims);
+          float *output_row = result_data + row * dims;
+          for (int j = 0; j < dims; j++) {
+            output_row[j] = SubtractOperator::template operation<float>(left_row[j], right_row[j]);
+          }
+        }
       } else {
         rc = RC::UNIMPLEMENTED;
       }
@@ -481,6 +503,20 @@ RC ArithmeticExpr::execute_calc(
       } else if (attr_type == AttrType::FLOATS) {
         binary_operator<LEFT_CONSTANT, RIGHT_CONSTANT, float, MultiplyOperator>(
             (float *)left.data(), (float *)right.data(), (float *)result.data(), result.capacity());
+      } else if (attr_type == AttrType::VECTORS) {
+        int dims = result.attr_len() / static_cast<int>(sizeof(float));
+        int rows = result.capacity();
+        float *result_data = (float *)result.data();
+        const float *left_data = (const float *)left.data();
+        const float *right_data = (const float *)right.data();
+        for (int row = 0; row < rows; row++) {
+          const float *left_row = left_data + (LEFT_CONSTANT ? 0 : row * dims);
+          const float *right_row = right_data + (RIGHT_CONSTANT ? 0 : row * dims);
+          float *output_row = result_data + row * dims;
+          for (int j = 0; j < dims; j++) {
+            output_row[j] = MultiplyOperator::template operation<float>(left_row[j], right_row[j]);
+          }
+        }
       } else {
         rc = RC::UNIMPLEMENTED;
       }

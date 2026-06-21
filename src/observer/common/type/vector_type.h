@@ -25,12 +25,13 @@ public:
   static RC parse_vector(const char *text, Value &value);
   static RC vector_to_string(const Value &value, string &result);
   static RC distance(const Value &left, const Value &right, const string &method, Value &result);
+  RC cast_to(const Value &val, AttrType type, Value &result) const override;
 
   int compare(const Value &left, const Value &right) const override;
 
-  RC add(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
-  RC subtract(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
-  RC multiply(const Value &left, const Value &right, Value &result) const override { return RC::UNIMPLEMENTED; }
+  RC add(const Value &left, const Value &right, Value &result) const override;
+  RC subtract(const Value &left, const Value &right, Value &result) const override;
+  RC multiply(const Value &left, const Value &right, Value &result) const override;
 
   RC to_string(const Value &val, string &result) const override { return vector_to_string(val, result); }
 };

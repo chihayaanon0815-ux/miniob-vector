@@ -51,13 +51,23 @@ RC InsertStmt::create(Db *db, const InsertSqlNode &inserts, Stmt *&stmt)
     const Value &value = values[i];
 
     if (field->type() == AttrType::VECTORS) {
-      if (value.attr_type() != AttrType::VECTORS) {
+      if (value.attr_type() == AttrType::CHARS) {
+        Value converted;
+        RC rc = Value::cast_to(value, AttrType::VECTORS, converted);
+        if (rc != RC::SUCCESS) {
+          LOG_WARN("invalid vector literal. field=%s, value=%s", field->name(), value.get_string().c_str());
+          return RC::INVALID_ARGUMENT;
+        }
+        if (converted.length() != field->len()) {
+          LOG_WARN("vector length mismatch. field=%s, expected=%d, actual=%d",
+              field->name(), field->len(), converted.length());
+          return RC::INVALID_ARGUMENT;
+        }
+      } else if (value.attr_type() != AttrType::VECTORS) {
         LOG_WARN("field type mismatch. field=%s, expected=%s, actual=%s",
             field->name(), attr_type_to_string(field->type()), attr_type_to_string(value.attr_type()));
         return RC::SCHEMA_FIELD_TYPE_MISMATCH;
-      }
-
-      if (value.length() != field->len()) {
+      } else if (value.length() != field->len()) {
         LOG_WARN("vector length mismatch. field=%s, expected=%d, actual=%d",
             field->name(), field->len(), value.length());
         return RC::INVALID_ARGUMENT;

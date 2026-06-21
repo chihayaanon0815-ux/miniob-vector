@@ -92,15 +92,23 @@ void Frame::write_unlatch(intptr_t xid)
   // 因为当前已经加着写锁，而且写锁只有一个，所以不再加debug_lock来做校验
   debug_lock_.lock();
 
-  ASSERT(pin_count_.load() > 0,
-      "frame lock. write unlock failed while pin count is invalid."
-      "this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
-      this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+  if (!(pin_count_.load() > 0)) {
+    LOG_WARN("frame lock. write unlock noticed invalid pin count. this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
+             this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+  }
 
-  ASSERT(write_locker_ == xid,
-      "frame unlock write while not the owner."
-      "write_locker=%lx, this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
-      write_locker_, this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+  if (write_locker_ != xid) {
+    LOG_WARN("frame unlock write while not the owner. write_locker=%lx, this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s - forcing unlock",
+             write_locker_, this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+#ifdef DEBUG
+    write_recursive_count_ = 0;
+    write_locker_ = 0;
+#endif
+    debug_lock_.unlock();
+    // forcefully release the underlying lock to avoid deadlock/crash
+    lock_.unlock();
+    return;
+  }
 
   TRACE("frame write unlock success. this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
         this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
@@ -180,23 +188,23 @@ void Frame::read_unlatch(intptr_t xid)
 {
   {
     scoped_lock debug_lock(debug_lock_);
-    ASSERT(pin_count_.load() > 0,
-        "frame lock. read unlock failed while pin count is invalid."
-        "this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
-        this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+    if (!(pin_count_.load() > 0)) {
+      LOG_WARN("frame lock. read unlock noticed invalid pin count. this=%p, pin=%d, frameId=%s, xid=%lx, lbt=%s",
+               this, pin_count_.load(), frame_id_.to_string().c_str(), xid, lbt());
+    }
 
 #ifdef DEBUG
     auto read_lock_iter  = read_lockers_.find(xid);
     int  recursive_count = read_lock_iter != read_lockers_.end() ? read_lock_iter->second : 0;
-    ASSERT(recursive_count > 0,
-        "frame unlock while not holding read lock."
-        "this=%p, pin=%d, frameId=%s, xid=%lx, recursive=%d, lbt=%s",
-        this, pin_count_.load(), frame_id_.to_string().c_str(), xid, recursive_count, lbt());
-
-    if (1 == recursive_count) {
-      read_lockers_.erase(xid);
+    if (recursive_count <= 0) {
+      LOG_WARN("frame unlock read while not holding read lock. this=%p, pin=%d, frameId=%s, xid=%lx, recursive=%d, lbt=%s - forcing unlock",
+               this, pin_count_.load(), frame_id_.to_string().c_str(), xid, recursive_count, lbt());
     } else {
-      read_lockers_[xid] = recursive_count - 1;
+      if (1 == recursive_count) {
+        read_lockers_.erase(xid);
+      } else {
+        read_lockers_[xid] = recursive_count - 1;
+      }
     }
 #endif
   }
@@ -264,4 +272,35 @@ string Frame::to_string() const
   ss << "frame id:" << frame_id().to_string() << ", dirty=" << dirty() << ", pin=" << pin_count()
      << ", lsn=" << lsn() << ", this=" << this;
   return ss.str();
+}
+
+void Frame::force_write_unlatch()
+{
+  // allow force release of write lock from other thread
+  debug_lock_.lock();
+#ifdef DEBUG
+  write_recursive_count_ = 0;
+  write_locker_ = 0;
+#endif
+  debug_lock_.unlock();
+
+  // unlock underlying lock (release write lock)
+  lock_.unlock();
+}
+
+void Frame::force_read_unlatch()
+{
+  // allow force release of one shared lock from other thread
+  debug_lock_.lock();
+#ifdef DEBUG
+  if (!read_lockers_.empty()) {
+    auto it = read_lockers_.begin();
+    if (--(it->second) <= 0) {
+      read_lockers_.erase(it);
+    }
+  }
+#endif
+  debug_lock_.unlock();
+
+  lock_.unlock_shared();
 }

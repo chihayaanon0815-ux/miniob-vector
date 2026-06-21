@@ -12,6 +12,7 @@ See the Mulan PSL v2 for more details. */
 #include "storage/record/heap_record_scanner.h"
 #include "common/log/log.h"
 #include "storage/index/bplus_tree_index.h"
+#include "storage/index/ivfflat_index.h"
 #include "storage/common/meta_util.h"
 #include "storage/db/db.h"
 
@@ -122,7 +123,8 @@ RC HeapTableEngine::get_chunk_scanner(ChunkFileScanner &scanner, Trx *trx, ReadW
   return rc;
 }
 
-RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name)
+RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const char *index_name,
+                                   IndexType index_type, int lists, int probes)
 {
   if (common::is_blank(index_name) || nullptr == field_meta) {
     LOG_INFO("Invalid input arguments, table name is %s, index_name is blank or attribute_name is blank", table_meta_->name());
@@ -131,16 +133,22 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
 
   IndexMeta new_index_meta;
 
-  RC rc = new_index_meta.init(index_name, *field_meta);
+  RC rc = new_index_meta.init(index_name, *field_meta, index_type, lists, probes);
   if (rc != RC::SUCCESS) {
-    LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s, field_name:%s", 
+    LOG_INFO("Failed to init IndexMeta in table:%s, index_name:%s, field_name:%s",
              table_meta_->name(), index_name, field_meta->name());
     return rc;
   }
 
   // 创建索引相关数据
-  BplusTreeIndex *index      = new BplusTreeIndex();
-  string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+  Index  *index      = nullptr;
+  string  index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_name);
+
+  if (index_type == IndexType::IVFFLAT) {
+    index = new IvfflatIndex();
+  } else {
+    index = new BplusTreeIndex();
+  }
 
   rc = index->create(table_, index_file.c_str(), new_index_meta, *field_meta);
   if (rc != RC::SUCCESS) {
@@ -179,6 +187,14 @@ RC HeapTableEngine::create_index(Trx *trx, const FieldMeta *field_meta, const ch
   LOG_INFO("inserted all records into new index. table=%s, index=%s", table_meta_->name(), index_name);
 
   indexes_.push_back(index);
+
+  // 同步索引数据到磁盘（IVF 索引需要在此完成聚类）
+  rc = index->sync();
+  if (rc != RC::SUCCESS) {
+    LOG_WARN("failed to sync index. table=%s, index=%s, rc=%s",
+             table_meta_->name(), index_name, strrc(rc));
+    return rc;
+  }
 
   /// 接下来将这个索引放到表的元数据中
   TableMeta new_table_meta(*table_meta_);
@@ -325,8 +341,14 @@ RC HeapTableEngine::open()
       return RC::INTERNAL;
     }
 
-    BplusTreeIndex *index      = new BplusTreeIndex();
-    string          index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+    Index  *index      = nullptr;
+    string  index_file = table_index_file(db_->path().c_str(), table_meta_->name(), index_meta->name());
+
+    if (index_meta->index_type() == IndexType::IVFFLAT) {
+      index = new IvfflatIndex();
+    } else {
+      index = new BplusTreeIndex();
+    }
 
     rc = index->open(table_, index_file.c_str(), *index_meta, *field_meta);
     if (rc != RC::SUCCESS) {

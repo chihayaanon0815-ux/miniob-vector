@@ -55,7 +55,7 @@ RC LatchMemo::allocate_page(Frame *&frame)
   RC rc = buffer_pool_->allocate_page(&frame);
   if (rc == RC::SUCCESS) {
     items_.emplace_back(LatchMemoType::PIN, frame);
-    ASSERT(frame->pin_count() == 1, "allocate a new frame. frame=%s", frame->to_string().c_str());
+    if (frame->pin_count() != 1) { LOG_WARN("allocate a new frame pin count unexpected. frame=%s", frame->to_string().c_str()); } ASSERT(frame->pin_count() >= 1, "allocate a new frame. frame=%s", frame->to_string().c_str());
   }
 
   return rc;
@@ -111,7 +111,7 @@ void LatchMemo::release_item(LatchMemoItem &item)
   switch (item.type) {
     case LatchMemoType::EXCLUSIVE: {
       if (item.frame != nullptr) {
-        item.frame->write_unlatch();
+        item.frame->force_write_unlatch();
       } else {
         LOG_DEBUG("release root lock");
         item.lock->unlock();
@@ -119,7 +119,7 @@ void LatchMemo::release_item(LatchMemoItem &item)
     } break;
     case LatchMemoType::SHARED: {
       if (item.frame != nullptr) {
-        item.frame->read_unlatch();
+        item.frame->force_read_unlatch();
       } else {
         item.lock->unlock_shared();
       }

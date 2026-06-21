@@ -82,6 +82,53 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
     }
   }
 
+  // Build alias map from SELECT expressions (name -> expression)
+  unordered_map<string, Expression *> alias_map;
+  for (auto &expr : bound_expressions) {
+    const char *name = expr->name();
+    if (name != nullptr && strlen(name) > 0) {
+      alias_map[name] = expr.get();
+    }
+  }
+
+  // Bind ORDER BY expressions
+  // For each order_by expression, check if it's an alias reference first
+  vector<unique_ptr<Expression>> order_by_expressions;
+  vector<bool>                   order_by_is_asc;
+  for (auto &order_node : select_sql.order_by) {
+    unique_ptr<Expression> &order_expr = order_node->expr;
+
+    // Check if the ORDER BY expression is a simple alias reference
+    if (order_expr->type() == ExprType::UNBOUND_FIELD) {
+      auto unbound = static_cast<UnboundFieldExpr *>(order_expr.get());
+      const char *table_name = unbound->table_name();
+      const char *field_name = unbound->field_name();
+
+      // If no table prefix and the name matches an alias, use the aliased expression
+      if ((table_name == nullptr || strlen(table_name) == 0) && field_name != nullptr) {
+        auto it = alias_map.find(field_name);
+        if (it != alias_map.end()) {
+          // Found an alias match - use the aliased expression
+          order_by_expressions.emplace_back(it->second->copy());
+          order_by_is_asc.push_back(order_node->is_asc);
+          continue;
+        }
+      }
+    }
+
+    // Otherwise, bind the expression normally
+    vector<unique_ptr<Expression>> bound_order_exprs;
+    RC rc = expression_binder.bind_expression(order_expr, bound_order_exprs);
+    if (OB_FAIL(rc)) {
+      LOG_INFO("bind order by expression failed. rc=%s", strrc(rc));
+      return rc;
+    }
+    for (auto &bound_expr : bound_order_exprs) {
+      order_by_expressions.emplace_back(std::move(bound_expr));
+      order_by_is_asc.push_back(order_node->is_asc);
+    }
+  }
+
   Table *default_table = nullptr;
   if (tables.size() == 1) {
     default_table = tables[0];
@@ -107,6 +154,9 @@ RC SelectStmt::create(Db *db, SelectSqlNode &select_sql, Stmt *&stmt)
   select_stmt->query_expressions_.swap(bound_expressions);
   select_stmt->filter_stmt_ = filter_stmt;
   select_stmt->group_by_.swap(group_by_expressions);
+  select_stmt->order_by_.swap(order_by_expressions);
+  select_stmt->order_by_is_asc_.swap(order_by_is_asc);
+  select_stmt->limit_num_ = select_sql.limit_num;
   stmt                      = select_stmt;
   return RC::SUCCESS;
 }
